@@ -22,7 +22,7 @@
     clippy::single_component_path_imports,
     clippy::upper_case_acronyms, // can be removed on a major release boundary
 )]
-#![recursion_limit = "2048"]
+#![recursion_limit = "8068"]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! Trust-DNS Protocol library

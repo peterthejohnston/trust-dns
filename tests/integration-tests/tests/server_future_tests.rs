@@ -279,12 +279,12 @@ fn lazy_tls_client(
     let config = ClientConfig::builder()
         .with_safe_default_cipher_suites()
         .with_safe_default_kx_groups()
-        .with_protocol_versions(&[&rustls::version::TLS12])
+        .with_safe_default_protocol_versions()
         .unwrap()
         .with_root_certificates(root_store)
         .with_no_client_auth();
 
-    TlsClientConnection::new(ipaddr, dns_name, Arc::new(config))
+    TlsClientConnection::new(ipaddr, None, dns_name, Arc::new(config))
 }
 
 fn client_thread_www<C: ClientConnection>(conn: C)
@@ -311,7 +311,7 @@ where
     assert_eq!(record.rr_type(), RecordType::A);
     assert_eq!(record.dns_class(), DNSClass::IN);
 
-    if let RData::A(ref address) = *record.rdata() {
+    if let RData::A(ref address) = *record.data().unwrap() {
         assert_eq!(address, &Ipv4Addr::new(93, 184, 216, 34))
     } else {
         panic!();

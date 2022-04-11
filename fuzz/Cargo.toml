@@ -1,0 +1,31 @@
+[package]
+name = "trust-dns-proto-fuzz"
+version = "0.0.0"
+authors = ["Automatically generated"]
+publish = false
+edition = "2018"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+trust-dns-proto = { path = "../crates/proto"}
+
+[[bin]]
+name = "message"
+path = "fuzz_targets/message.rs"
+test = false
+doc = false
+
+# [[bin]]
+# name = "name"
+# path = "fuzz_targets/name.rs"
+# test = false
+# doc = false
+
+# [[bin]]
+# name = "rdata"
+# path = "fuzz_targets/rdata.rs"
+# test = false
+# doc = false

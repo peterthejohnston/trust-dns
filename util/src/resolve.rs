@@ -9,6 +9,7 @@
 
 // BINARY WARNINGS
 #![warn(
+    clippy::default_trait_access,
     clippy::dbg_macro,
     clippy::unimplemented,
     missing_copy_implementations,
@@ -19,11 +20,12 @@
     unreachable_pub
 )]
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
+use clap::Parser;
 use console::style;
-use structopt::StructOpt;
 
+use trust_dns_proto::xfer::DnsRequestOptions;
 use trust_dns_resolver::config::{
     NameServerConfig, NameServerConfigGroup, Protocol, ResolverConfig, ResolverOpts,
 };
@@ -38,77 +40,86 @@ use trust_dns_resolver::TokioAsyncResolver;
 /// nameservers are the Google provided ones. The system configured ones can be
 /// used with the `--system` FLAG. Other nameservers, as many as desired, can
 /// be configured directly with the `--nameserver` OPTION.
-#[derive(Debug, StructOpt)]
-#[structopt(name = "resolve")]
+#[derive(Debug, Parser)]
+#[clap(name = "resolve")]
 struct Opts {
     /// Name to attempt to resolve, if followed by a '.' then it's a fully-qualified-domain-name.
     domainname: String,
 
     /// Type of query to issue, e.g. A, AAAA, NS, etc.
-    #[structopt(short = "t", long = "type", default_value = "A")]
+    #[clap(short = 't', long = "type", default_value = "A")]
     ty: RecordType,
 
     /// Happy eye balls lookup, ipv4 and ipv6
-    #[structopt(short = "e", long = "happy", conflicts_with("ty"))]
+    #[clap(short = 'e', long = "happy", conflicts_with("ty"))]
     happy: bool,
 
     /// Use system configuration, e.g. /etc/resolv.conf, instead of defaults
-    #[structopt(short = "s", long = "system")]
+    #[clap(short = 's', long = "system")]
     system: bool,
 
     /// Use google resolvers, default
-    #[structopt(long)]
+    #[clap(long)]
     google: bool,
 
     /// Use cloudflare resolvers
-    #[structopt(long)]
+    #[clap(long)]
     cloudflare: bool,
 
     /// Use quad9 resolvers
-    #[structopt(long)]
+    #[clap(long)]
     quad9: bool,
 
     /// Specify a nameserver to use, ip and port e.g. 8.8.8.8:53 or \[2001:4860:4860::8888\]:53 (port required)
-    #[structopt(short = "n", long, require_delimiter = true)]
+    #[clap(
+        short = 'n',
+        long,
+        use_value_delimiter = true,
+        require_value_delimiter = true
+    )]
     nameserver: Vec<SocketAddr>,
 
+    /// Specify the IP address to connect from.
+    #[clap(long)]
+    bind: Option<IpAddr>,
+
     /// Use ipv4 addresses only, default is both ipv4 and ipv6
-    #[structopt(long)]
+    #[clap(long)]
     ipv4: bool,
 
     /// Use ipv6 addresses only, default is both ipv4 and ipv6
-    #[structopt(long)]
+    #[clap(long)]
     ipv6: bool,
 
     /// Use only UDP, default to UDP and TCP
-    #[structopt(long)]
+    #[clap(long)]
     udp: bool,
 
     /// Use only TCP, default to UDP and TCP
-    #[structopt(long)]
+    #[clap(long)]
     tcp: bool,
 
     /// Enable debug and all logging
-    #[structopt(long)]
+    #[clap(long)]
     debug: bool,
 
     /// Enable info + warning + error logging
-    #[structopt(long)]
+    #[clap(long)]
     info: bool,
 
     /// Enable warning + error logging
-    #[structopt(long)]
+    #[clap(long)]
     warn: bool,
 
     /// Enable error logging
-    #[structopt(long)]
+    #[clap(long)]
     error: bool,
 }
 
 /// Run the resolve program
 #[tokio::main]
 pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let opts: Opts = Opts::from_args();
+    let opts: Opts = Opts::parse();
 
     // enable logging early
     let log_level = if opts.debug {
@@ -152,6 +163,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             trust_nx_responses: false,
             #[cfg(feature = "dns-over-rustls")]
             tls_config: None,
+            bind_addr: opts.bind.map(|ip| SocketAddr::new(ip, 0)),
         });
 
         name_servers.push(NameServerConfig {
@@ -161,6 +173,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
             trust_nx_responses: false,
             #[cfg(feature = "dns-over-rustls")]
             tls_config: None,
+            bind_addr: opts.bind.map(|ip| SocketAddr::new(ip, 0)),
         });
     }
 
@@ -233,7 +246,7 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         lookup.into()
     } else {
         resolver
-            .lookup(name.to_string(), ty, Default::default())
+            .lookup(name.to_string(), ty, DnsRequestOptions::default())
             .await?
     };
 
@@ -245,14 +258,19 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     for r in lookup.record_iter() {
-        println!(
-            "\t{name} {ttl} {class} {ty} {rdata}",
+        print!(
+            "\t{name} {ttl} {class} {ty}",
             name = style(r.name()).blue(),
             ttl = style(r.ttl()).blue(),
             class = style(r.dns_class()).blue(),
             ty = style(r.record_type()).blue(),
-            rdata = style(r.rdata()).yellow()
         );
+
+        if let Some(rdata) = r.data() {
+            println!(" {rdata}", rdata = rdata);
+        } else {
+            println!("NULL")
+        }
     }
 
     Ok(())

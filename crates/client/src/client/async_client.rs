@@ -15,6 +15,7 @@ use futures_util::ready;
 use futures_util::stream::{Stream, StreamExt};
 use log::debug;
 use rand;
+use trust_dns_proto::op::Edns;
 
 use crate::client::Signer;
 use crate::error::*;
@@ -43,6 +44,7 @@ pub type ClientFuture = AsyncClient;
 ///
 /// This Client is generic and capable of wrapping UDP, TCP, and other underlying DNS protocol
 ///  implementations.
+#[derive(Clone)]
 pub struct AsyncClient {
     exchange: DnsExchange,
     use_edns: bool,
@@ -64,7 +66,7 @@ impl AsyncClient {
         signer: Option<Arc<Signer>>,
     ) -> Result<
         (
-            AsyncClient,
+            Self,
             DnsExchangeBackground<DnsMultiplexer<S, Signer>, TokioTime>,
         ),
         ProtoError,
@@ -93,7 +95,7 @@ impl AsyncClient {
         signer: Option<Arc<Signer>>,
     ) -> Result<
         (
-            AsyncClient,
+            Self,
             DnsExchangeBackground<DnsMultiplexer<S, Signer>, TokioTime>,
         ),
         ProtoError,
@@ -118,14 +120,14 @@ impl AsyncClient {
     ///  If it is None, then another thread has already run the background.
     pub async fn connect<F, S>(
         connect_future: F,
-    ) -> Result<(AsyncClient, DnsExchangeBackground<S, TokioTime>), ProtoError>
+    ) -> Result<(Self, DnsExchangeBackground<S, TokioTime>), ProtoError>
     where
         S: DnsRequestSender,
         F: Future<Output = Result<S, ProtoError>> + 'static + Send + Unpin,
     {
         let result = DnsExchange::connect(connect_future).await;
         let use_edns = true;
-        result.map(|(exchange, bg)| (AsyncClient { exchange, use_edns }, bg))
+        result.map(|(exchange, bg)| (Self { exchange, use_edns }, bg))
     }
 
     /// (Re-)enable usage of EDNS for outgoing messages
@@ -136,15 +138,6 @@ impl AsyncClient {
     /// Disable usage of EDNS for outgoing messages
     pub fn disable_edns(&mut self) {
         self.use_edns = false;
-    }
-}
-
-impl Clone for AsyncClient {
-    fn clone(&self) -> Self {
-        AsyncClient {
-            exchange: self.exchange.clone(),
-            use_edns: true,
-        }
     }
 }
 
@@ -276,9 +269,11 @@ pub trait ClientHandle: 'static + Clone + DnsHandle<Error = ProtoError> + Send {
 
         // Extended dns
         if self.is_using_edns() {
-            let edns = message.edns_mut();
-            edns.set_max_payload(MAX_PAYLOAD_LEN);
-            edns.set_version(0);
+            message
+                .extensions_mut()
+                .get_or_insert_with(Edns::new)
+                .set_max_payload(MAX_PAYLOAD_LEN)
+                .set_version(0);
         }
 
         // add the query
@@ -664,7 +659,7 @@ where
     R: Stream<Item = Result<DnsResponse, ProtoError>> + Send + Unpin + 'static,
 {
     fn new(inner: R, maybe_incr: bool) -> Self {
-        ClientStreamXfr {
+        Self {
             state: ClientStreamXfrState::Start { inner, maybe_incr },
         }
     }
@@ -709,16 +704,11 @@ impl<R> ClientStreamXfrState<R> {
     }
 
     /// Helper to ingest answer Records
-    // TODO this is complexe enough it should get its own tests
+    // TODO: this is complex enough it should get its own tests
     fn process(&mut self, answers: &[Record]) -> Result<(), ClientError> {
         use ClientStreamXfrState::*;
         fn get_serial(r: &Record) -> Option<u32> {
-            let rdata = r.rdata();
-            if let RData::SOA(soa) = rdata {
-                Some(soa.serial())
-            } else {
-                None
-            }
+            r.data().and_then(RData::as_soa).map(SOA::serial)
         }
 
         if answers.is_empty() {

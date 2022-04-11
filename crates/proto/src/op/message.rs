@@ -7,7 +7,7 @@
 
 //! Basic protocol message for DNS
 
-use std::{iter, mem, ops::Deref, sync::Arc};
+use std::{fmt, iter, mem, ops::Deref, sync::Arc};
 
 use log::{debug, warn};
 
@@ -113,7 +113,7 @@ pub struct HeaderCounts {
 impl Message {
     /// Returns a new "empty" Message
     pub fn new() -> Self {
-        Message {
+        Self {
             header: Header::new(),
             queries: Vec::new(),
             answers: Vec::new(),
@@ -131,8 +131,8 @@ impl Message {
     /// * `id` - message id should match the request message id
     /// * `op_code` - operation of the request
     /// * `response_code` - the error code for the response
-    pub fn error_msg(id: u16, op_code: OpCode, response_code: ResponseCode) -> Message {
-        let mut message = Message::new();
+    pub fn error_msg(id: u16, op_code: OpCode, response_code: ResponseCode) -> Self {
+        let mut message = Self::new();
         message
             .set_message_type(MessageType::Response)
             .set_id(id)
@@ -153,6 +153,12 @@ impl Message {
 
         // TODO, perhaps just quickly add a few response records here? that we know would fit?
         truncated
+    }
+
+    /// Sets the `Header` with provided
+    pub fn set_header(&mut self, header: Header) -> &mut Self {
+        self.header = header;
+        self
     }
 
     /// see `Header::set_id`
@@ -295,6 +301,19 @@ impl Message {
     /// Add an additional Record to the message
     pub fn add_additional(&mut self, record: Record) -> &mut Self {
         self.additionals.push(record);
+        self
+    }
+
+    /// Add all the records from the iterator to the additionals section of the Message
+    pub fn add_additionals<R, I>(&mut self, records: R) -> &mut Self
+    where
+        R: IntoIterator<Item = Record, IntoIter = I>,
+        I: Iterator<Item = Record>,
+    {
+        for record in records {
+            self.add_additional(record);
+        }
+
         self
     }
 
@@ -501,18 +520,31 @@ impl Message {
     /// ```
     /// # Return value
     ///
-    /// Returns the EDNS record if it was found in the additional section.
+    /// Optionally returns a reference to EDNS section
+    #[deprecated(note = "Please use `extensions()`")]
     pub fn edns(&self) -> Option<&Edns> {
         self.edns.as_ref()
     }
 
-    /// If edns is_none, this will create a new default Edns.
+    /// Optionally returns mutable reference to EDNS section
+    #[deprecated(
+        note = "Please use `extensions_mut()`. You can chain `.get_or_insert_with(Edns::new)` to recover original behavior of adding Edns if not present"
+    )]
     pub fn edns_mut(&mut self) -> &mut Edns {
         if self.edns.is_none() {
-            self.edns = Some(Edns::new());
+            self.set_edns(Edns::new());
         }
-
         self.edns.as_mut().unwrap()
+    }
+
+    /// Returns reference of Edns section
+    pub fn extensions(&self) -> &Option<Edns> {
+        &self.edns
+    }
+
+    /// Returns mutable reference of Edns section
+    pub fn extensions_mut(&mut self) -> &mut Option<Edns> {
+        &mut self.edns
     }
 
     /// # Return value
@@ -671,9 +703,9 @@ impl Message {
     }
 
     /// Decodes a message from the buffer.
-    pub fn from_vec(buffer: &[u8]) -> ProtoResult<Message> {
+    pub fn from_vec(buffer: &[u8]) -> ProtoResult<Self> {
         let mut decoder = BinDecoder::new(buffer);
-        Message::read(&mut decoder)
+        Self::read(&mut decoder)
     }
 
     /// Encodes the Message into a buffer
@@ -763,13 +795,36 @@ impl From<Message> for MessageParts {
             signature,
             edns,
         } = msg;
-        MessageParts {
+        Self {
             header,
             queries,
             answers,
             name_servers,
             additionals,
             sig0: signature,
+            edns,
+        }
+    }
+}
+
+impl From<MessageParts> for Message {
+    fn from(msg: MessageParts) -> Self {
+        let MessageParts {
+            header,
+            queries,
+            answers,
+            name_servers,
+            additionals,
+            sig0,
+            edns,
+        } = msg;
+        Self {
+            header,
+            queries,
+            answers,
+            name_servers,
+            additionals,
+            signature: sig0,
             edns,
         }
     }
@@ -985,7 +1040,7 @@ impl<'r> BinDecodable<'r> for Message {
             header.merge_response_code(high_response_code);
         }
 
-        Ok(Message {
+        Ok(Self {
             header,
             queries,
             answers,
@@ -994,6 +1049,43 @@ impl<'r> BinDecodable<'r> for Message {
             signature,
             edns,
         })
+    }
+}
+
+impl fmt::Display for Message {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        let write_query = |slice, f: &mut fmt::Formatter<'_>| -> Result<(), fmt::Error> {
+            for d in slice {
+                writeln!(f, ";; {}", d)?;
+            }
+
+            Ok(())
+        };
+
+        let write_slice = |slice, f: &mut fmt::Formatter<'_>| -> Result<(), fmt::Error> {
+            for d in slice {
+                writeln!(f, "{}", d)?;
+            }
+
+            Ok(())
+        };
+
+        writeln!(f, "; header {header}", header = self.header())?;
+
+        if let Some(edns) = self.extensions() {
+            writeln!(f, "; edns {}", edns)?;
+        }
+
+        writeln!(f, "; query")?;
+        write_query(self.queries(), f)?;
+        writeln!(f, "; answers {}", self.answer_count())?;
+        write_slice(self.answers(), f)?;
+        writeln!(f, "; nameservers {}", self.name_server_count())?;
+        write_slice(self.name_servers(), f)?;
+        writeln!(f, "; additionals {}", self.additional_count())?;
+        write_slice(self.additionals(), f)?;
+
+        Ok(())
     }
 }
 
@@ -1072,23 +1164,23 @@ fn test_emit_and_read(message: Message) {
 #[rustfmt::skip]
 fn test_legit_message() {
     let buf: Vec<u8> = vec![
-  0x10,0x00,0x81,0x80, // id = 4096, response, op=query, recursion_desired, recursion_available, no_error
-  0x00,0x01,0x00,0x01, // 1 query, 1 answer,
-  0x00,0x00,0x00,0x00, // 0 namesservers, 0 additional record
+    0x10,0x00,0x81,0x80, // id = 4096, response, op=query, recursion_desired, recursion_available, no_error
+    0x00,0x01,0x00,0x01, // 1 query, 1 answer,
+    0x00,0x00,0x00,0x00, // 0 namesservers, 0 additional record
 
-  0x03,b'w',b'w',b'w', // query --- www.example.com
-  0x07,b'e',b'x',b'a', //
-  b'm',b'p',b'l',b'e', //
-  0x03,b'c',b'o',b'm', //
-  0x00,                // 0 = endname
-  0x00,0x01,0x00,0x01, // ReordType = A, Class = IN
+    0x03,b'w',b'w',b'w', // query --- www.example.com
+    0x07,b'e',b'x',b'a', //
+    b'm',b'p',b'l',b'e', //
+    0x03,b'c',b'o',b'm', //
+    0x00,                // 0 = endname
+    0x00,0x01,0x00,0x01, // ReordType = A, Class = IN
 
-  0xC0,0x0C,           // name pointer to www.example.com
-  0x00,0x01,0x00,0x01, // RecordType = A, Class = IN
-  0x00,0x00,0x00,0x02, // TTL = 2 seconds
-  0x00,0x04,           // record length = 4 (ipv4 address)
-  0x5D,0xB8,0xD8,0x22, // address = 93.184.216.34
-  ];
+    0xC0,0x0C,           // name pointer to www.example.com
+    0x00,0x01,0x00,0x01, // RecordType = A, Class = IN
+    0x00,0x00,0x00,0x02, // TTL = 2 seconds
+    0x00,0x04,           // record length = 4 (ipv4 address)
+    0x5D,0xB8,0xD8,0x22, // address = 93.184.216.34
+    ];
 
     let mut decoder = BinDecoder::new(&buf);
     let message = Message::read(&mut decoder).unwrap();
@@ -1105,4 +1197,13 @@ fn test_legit_message() {
     let message = Message::read(&mut decoder).unwrap();
 
     assert_eq!(message.id(), 4096);
+}
+
+#[test]
+fn rdata_zero_roundtrip() {
+    let buf = &[
+        160, 160, 0, 13, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0,
+    ];
+
+    assert!(Message::from_bytes(buf).is_err());
 }

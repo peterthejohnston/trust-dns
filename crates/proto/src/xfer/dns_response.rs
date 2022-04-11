@@ -20,7 +20,7 @@ use futures_util::stream::Stream;
 use crate::error::{ProtoError, ProtoErrorKind, ProtoResult};
 use crate::op::{Message, ResponseCode};
 use crate::rr::rdata::SOA;
-use crate::rr::RecordType;
+use crate::rr::{RData, RecordType};
 
 /// A stream returning DNS responses
 pub struct DnsResponseStream {
@@ -84,19 +84,19 @@ impl Stream for DnsResponseStream {
 
 impl From<TimeoutFuture> for DnsResponseStream {
     fn from(f: TimeoutFuture) -> Self {
-        DnsResponseStream::new(DnsResponseStreamInner::Timeout(f))
+        Self::new(DnsResponseStreamInner::Timeout(f))
     }
 }
 
 impl From<mpsc::Receiver<ProtoResult<DnsResponse>>> for DnsResponseStream {
     fn from(receiver: mpsc::Receiver<ProtoResult<DnsResponse>>) -> Self {
-        DnsResponseStream::new(DnsResponseStreamInner::Receiver(receiver))
+        Self::new(DnsResponseStreamInner::Receiver(receiver))
     }
 }
 
 impl From<ProtoError> for DnsResponseStream {
     fn from(e: ProtoError) -> Self {
-        DnsResponseStream::new(DnsResponseStreamInner::Error(Some(e)))
+        Self::new(DnsResponseStreamInner::Error(Some(e)))
     }
 }
 
@@ -105,7 +105,7 @@ where
     F: Future<Output = Result<DnsResponse, ProtoError>> + Send + 'static,
 {
     fn from(f: Pin<Box<F>>) -> Self {
-        DnsResponseStream::new(DnsResponseStreamInner::Boxed(
+        Self::new(DnsResponseStreamInner::Boxed(
             f as Pin<Box<dyn Future<Output = Result<DnsResponse, ProtoError>> + Send>>,
         ))
     }
@@ -136,7 +136,7 @@ impl DnsResponse {
     pub fn soa(&self) -> Option<SOA> {
         self.name_servers()
             .iter()
-            .filter_map(|record| record.rdata().as_soa())
+            .filter_map(|record| record.data().and_then(RData::as_soa))
             .next()
             .cloned()
     }
@@ -200,9 +200,14 @@ impl DnsResponse {
         // TODO: should this ensure that the SOA zone matches the Queried Zone?
         self.name_servers()
             .iter()
-            .filter_map(|record| record.rdata().as_soa().map(|soa| (record.ttl(), soa)))
+            .filter_map(|record| {
+                record
+                    .data()
+                    .and_then(RData::as_soa)
+                    .map(|soa| (record.ttl(), soa))
+            })
             .next()
-            .map(|(ttl, soa)| (ttl as u32).min(soa.minimum()).max(0))
+            .map(|(ttl, soa)| (ttl as u32).min(soa.minimum()))
     }
 
     /// Does the response contain any records matching the query name and type?
@@ -277,6 +282,11 @@ impl DnsResponse {
             _ => None,
         }
     }
+
+    /// Take the inner Message from the response
+    pub fn into_inner(self) -> Message {
+        self.0
+    }
 }
 
 impl Deref for DnsResponse {
@@ -294,14 +304,14 @@ impl DerefMut for DnsResponse {
 }
 
 impl From<DnsResponse> for Message {
-    fn from(response: DnsResponse) -> Message {
+    fn from(response: DnsResponse) -> Self {
         response.0
     }
 }
 
 impl From<Message> for DnsResponse {
-    fn from(message: Message) -> DnsResponse {
-        DnsResponse(message)
+    fn from(message: Message) -> Self {
+        Self(message)
     }
 }
 

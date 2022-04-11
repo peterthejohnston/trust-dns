@@ -12,6 +12,7 @@ use futures_util::lock::Mutex;
 use h2::server;
 use log::{debug, warn};
 use tokio::io::{AsyncRead, AsyncWrite};
+use trust_dns_proto::rr::Record;
 
 use crate::{
     authority::MessageResponse,
@@ -23,7 +24,7 @@ use crate::{
 };
 
 pub(crate) async fn h2_handler<T, I>(
-    handler: Arc<Mutex<T>>,
+    handler: Arc<T>,
     io: I,
     src_addr: SocketAddr,
     dns_hostname: Arc<str>,
@@ -70,7 +71,7 @@ pub(crate) async fn h2_handler<T, I>(
 async fn handle_request<T>(
     bytes: BytesMut,
     src_addr: SocketAddr,
-    handler: Arc<Mutex<T>>,
+    handler: Arc<T>,
     responder: HttpsResponseHandle,
 ) where
     T: RequestHandler,
@@ -83,9 +84,16 @@ struct HttpsResponseHandle(Arc<Mutex<::h2::server::SendResponse<Bytes>>>);
 
 #[async_trait::async_trait]
 impl ResponseHandler for HttpsResponseHandle {
-    async fn send_response(
+    async fn send_response<'a>(
         &mut self,
-        response: MessageResponse<'_, '_>,
+        response: MessageResponse<
+            '_,
+            'a,
+            impl Iterator<Item = &'a Record> + Send + 'a,
+            impl Iterator<Item = &'a Record> + Send + 'a,
+            impl Iterator<Item = &'a Record> + Send + 'a,
+            impl Iterator<Item = &'a Record> + Send + 'a,
+        >,
     ) -> io::Result<ResponseInfo> {
         use crate::proto::https::response;
         use crate::proto::https::HttpsError;

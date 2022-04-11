@@ -215,7 +215,7 @@ pub enum ProtoErrorKind {
     // foreign
     /// An error got returned from IO
     #[error("io error: {0}")]
-    Io(#[from] io::Error),
+    Io(io::Error),
 
     /// Any sync poised error
     #[error("lock poisoned error")]
@@ -252,6 +252,46 @@ pub enum ProtoErrorKind {
     /// An int parsing error
     #[error("error parsing int")]
     ParseInt(#[from] std::num::ParseIntError),
+
+    /// A Quinn (Quic) connection error occured
+    #[cfg(feature = "quinn")]
+    #[error("error creating quic connection: {0}")]
+    QuinnConnect(#[from] quinn::ConnectError),
+
+    /// A Quinn (QUIC) connection error occured
+    #[cfg(feature = "quinn")]
+    #[error("error with quic connection: {0}")]
+    QuinnConnection(#[from] quinn::ConnectionError),
+
+    /// A Quinn (QUIC) write error occured
+    #[cfg(feature = "quinn")]
+    #[error("error writing to quic connection: {0}")]
+    QuinnWriteError(#[from] quinn::WriteError),
+
+    /// A Quinn (QUIC) read error occured
+    #[cfg(feature = "quinn")]
+    #[error("error writing to quic read: {0}")]
+    QuinnReadError(#[from] quinn::ReadExactError),
+
+    /// A Quinn (QUIC) configuration error occured
+    #[cfg(feature = "quinn")]
+    #[error("error constructing quic configuration: {0}")]
+    QuinnConfigError(#[from] quinn::ConfigError),
+
+    /// Unknown QUIC stream used
+    #[cfg(feature = "quinn")]
+    #[error("an unknown quic stream was used")]
+    QuinnUnknownStreamError,
+
+    /// A quic message id should always be 0
+    #[cfg(feature = "quinn")]
+    #[error("quic messages should always be 0, got: {0}")]
+    QuicMessageIdNot0(u16),
+
+    /// A Rustls error occured
+    #[cfg(feature = "rustls")]
+    #[error("rustls construction error: {0}")]
+    RustlsError(#[from] rustls::Error),
 }
 
 /// The error type for errors that get returned in the crate
@@ -294,9 +334,14 @@ impl fmt::Display for ProtoError {
     }
 }
 
-impl From<ProtoErrorKind> for ProtoError {
-    fn from(kind: ProtoErrorKind) -> ProtoError {
-        ProtoError {
+impl<E> From<E> for ProtoError
+where
+    E: Into<ProtoErrorKind>,
+{
+    fn from(error: E) -> Self {
+        let kind: ProtoErrorKind = error.into();
+
+        Self {
             kind: Box::new(kind),
             #[cfg(feature = "backtrace")]
             backtrack: trace!(),
@@ -305,7 +350,7 @@ impl From<ProtoErrorKind> for ProtoError {
 }
 
 impl From<DecodeError> for ProtoError {
-    fn from(err: DecodeError) -> ProtoError {
+    fn from(err: DecodeError) -> Self {
         match err {
             DecodeError::PointerNotPriorToLabel { idx, ptr } => {
                 ProtoErrorKind::PointerNotPriorToLabel { idx, ptr }
@@ -323,65 +368,29 @@ impl From<DecodeError> for ProtoError {
 }
 
 impl From<&'static str> for ProtoError {
-    fn from(msg: &'static str) -> ProtoError {
+    fn from(msg: &'static str) -> Self {
         ProtoErrorKind::Message(msg).into()
     }
 }
 
 impl From<String> for ProtoError {
-    fn from(msg: String) -> ProtoError {
+    fn from(msg: String) -> Self {
         ProtoErrorKind::Msg(msg).into()
     }
 }
 
-impl From<io::Error> for ProtoError {
-    fn from(e: io::Error) -> ProtoError {
+impl From<io::Error> for ProtoErrorKind {
+    fn from(e: io::Error) -> Self {
         match e.kind() {
-            io::ErrorKind::TimedOut => ProtoErrorKind::Timeout.into(),
-            _ => ProtoErrorKind::from(e).into(),
+            io::ErrorKind::TimedOut => Self::Timeout,
+            _ => Self::Io(e),
         }
     }
 }
 
 impl<T> From<sync::PoisonError<T>> for ProtoError {
-    fn from(_e: sync::PoisonError<T>) -> ProtoError {
+    fn from(_e: sync::PoisonError<T>) -> Self {
         ProtoErrorKind::Poisoned.into()
-    }
-}
-
-impl From<Unspecified> for ProtoError {
-    fn from(e: Unspecified) -> ProtoError {
-        ProtoErrorKind::from(e).into()
-    }
-}
-
-impl From<SslErrorStack> for ProtoError {
-    fn from(e: SslErrorStack) -> ProtoError {
-        ProtoErrorKind::from(e).into()
-    }
-}
-
-impl From<url::ParseError> for ProtoError {
-    fn from(e: url::ParseError) -> ProtoError {
-        ProtoErrorKind::from(e).into()
-    }
-}
-
-impl From<std::str::Utf8Error> for ProtoError {
-    fn from(e: std::str::Utf8Error) -> ProtoError {
-        ProtoErrorKind::from(e).into()
-    }
-}
-
-impl From<std::string::FromUtf8Error> for ProtoError {
-    fn from(e: std::string::FromUtf8Error) -> ProtoError {
-        ProtoErrorKind::from(e).into()
-    }
-}
-
-impl From<std::num::ParseIntError> for ProtoError {
-    fn from(e: std::num::ParseIntError) -> ProtoError {
-        ProtoErrorKind::from(e).into()
     }
 }
 
@@ -434,8 +443,8 @@ pub mod not_ring {
 impl From<ProtoError> for io::Error {
     fn from(e: ProtoError) -> Self {
         match *e.kind() {
-            ProtoErrorKind::Timeout => io::Error::new(io::ErrorKind::TimedOut, e),
-            _ => io::Error::new(io::ErrorKind::Other, e),
+            ProtoErrorKind::Timeout => Self::new(io::ErrorKind::TimedOut, e),
+            _ => Self::new(io::ErrorKind::Other, e),
         }
     }
 }
@@ -510,6 +519,22 @@ impl Clone for ProtoErrorKind {
             Utf8(ref e) => Utf8(*e),
             FromUtf8(ref e) => FromUtf8(e.clone()),
             ParseInt(ref e) => ParseInt(e.clone()),
+            #[cfg(feature = "quinn")]
+            QuinnConnect(ref e) => QuinnConnect(e.clone()),
+            #[cfg(feature = "quinn")]
+            QuinnConnection(ref e) => QuinnConnection(e.clone()),
+            #[cfg(feature = "quinn")]
+            QuinnWriteError(ref e) => QuinnWriteError(e.clone()),
+            #[cfg(feature = "quinn")]
+            QuicMessageIdNot0(val) => QuicMessageIdNot0(val),
+            #[cfg(feature = "quinn")]
+            QuinnReadError(ref e) => QuinnReadError(e.clone()),
+            #[cfg(feature = "quinn")]
+            QuinnConfigError(ref e) => QuinnConfigError(e.clone()),
+            #[cfg(feature = "quinn")]
+            QuinnUnknownStreamError => QuinnUnknownStreamError,
+            #[cfg(feature = "rustls")]
+            RustlsError(ref e) => RustlsError(e.clone()),
         }
     }
 }

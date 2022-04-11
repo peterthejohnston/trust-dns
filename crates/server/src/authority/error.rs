@@ -39,12 +39,7 @@ pub enum LookupError {
 impl LookupError {
     /// Create a lookup error, specifying that a name exists at the location, but no matching RecordType
     pub fn for_name_exists() -> Self {
-        LookupError::NameExists
-    }
-
-    /// True if other records exist at the same name, but not the searched for RecordType
-    pub fn is_name_exists(&self) -> bool {
-        matches!(*self, LookupError::NameExists)
+        Self::NameExists
     }
 
     /// This is a non-existent domain name
@@ -62,19 +57,19 @@ impl From<ResponseCode> for LookupError {
     fn from(code: ResponseCode) -> Self {
         // this should never be a NoError
         debug_assert!(code != ResponseCode::NoError);
-        LookupError::ResponseCode(code)
+        Self::ResponseCode(code)
     }
 }
 
 impl From<io::Error> for LookupError {
     fn from(e: io::Error) -> Self {
-        LookupError::Io(e)
+        Self::Io(e)
     }
 }
 
 impl From<LookupError> for io::Error {
     fn from(e: LookupError) -> Self {
-        io::Error::new(io::ErrorKind::Other, Box::new(e))
+        Self::new(io::ErrorKind::Other, Box::new(e))
     }
 }
 

@@ -28,10 +28,10 @@ use crate::{
 use crate::{
     authority::{Authority, LookupError, LookupOptions, MessageRequest, UpdateResult, ZoneType},
     client::{
-        op::LowerQuery,
         rr::{LowerName, Name, RecordSet, RecordType, RrKey},
         serialize::txt::{Lexer, Parser, Token},
     },
+    server::RequestInfo,
     store::{file::FileConfig, in_memory::InMemoryAuthority},
 };
 
@@ -61,11 +61,11 @@ struct FileReaderState {
 
 impl FileReaderState {
     fn new() -> Self {
-        FileReaderState { level: 0 }
+        Self { level: 0 }
     }
 
     fn next_level(&self) -> Self {
-        FileReaderState {
+        Self {
             level: self.level + 1,
         }
     }
@@ -162,11 +162,7 @@ impl FileAuthority {
                         zone_path.display()
                     );
 
-                    FileAuthority::read_file(
-                        include_zone_path,
-                        &mut include_buf,
-                        state.next_level(),
-                    )?;
+                    Self::read_file(include_zone_path, &mut include_buf, state.next_level())?;
                     buf.push_str(&include_buf);
                 }
                 _ => {
@@ -196,7 +192,7 @@ impl FileAuthority {
 
         // TODO: this should really use something to read line by line or some other method to
         //  keep the usage down. and be a custom lexer...
-        FileAuthority::read_file(zone_path, &mut buf, FileReaderState::new())
+        Self::read_file(zone_path, &mut buf, FileReaderState::new())
             .map_err(|e| format!("failed to read {}: {:?}", &config.zone_file_path, e))?;
 
         let lexer = Lexer::new(&buf);
@@ -211,7 +207,7 @@ impl FileAuthority {
         );
         debug!("zone: {:#?}", records);
 
-        FileAuthority::new(origin, records, zone_type, allow_axfr)
+        Self::new(origin, records, zone_type, allow_axfr)
     }
 
     /// Unwrap the InMemoryAuthority
@@ -295,10 +291,10 @@ impl Authority for FileAuthority {
     ///  `is_secure` is true, in the case of no records found then NSEC records will be returned.
     async fn search(
         &self,
-        query: &LowerQuery,
+        request_info: RequestInfo<'_>,
         lookup_options: LookupOptions,
     ) -> Result<Self::Lookup, LookupError> {
-        self.0.search(query, lookup_options).await
+        self.0.search(request_info, lookup_options).await
     }
 
     /// Get the NS, NameServer, record for the zone
@@ -368,6 +364,12 @@ mod tests {
 
     #[test]
     fn test_load_zone() {
+        #[cfg(feature = "dnssec")]
+        let config = FileConfig {
+            zone_file_path: "../../tests/test-data/named_test_configs/dnssec/example.com.zone"
+                .to_string(),
+        };
+        #[cfg(not(feature = "dnssec"))]
         let config = FileConfig {
             zone_file_path: "../../tests/test-data/named_test_configs/example.com.zone".to_string(),
         };
@@ -392,9 +394,9 @@ mod tests {
             .into_iter()
             .next()
             .expect("A record not found in authity")
-            .rdata()
+            .data()
         {
-            RData::A(ip) => assert_eq!(Ipv4Addr::new(127, 0, 0, 1), *ip),
+            Some(RData::A(ip)) => assert_eq!(Ipv4Addr::new(127, 0, 0, 1), *ip),
             _ => panic!("wrong rdata type returned"),
         }
 
@@ -410,9 +412,9 @@ mod tests {
             .into_iter()
             .next()
             .expect("A record not found in authity")
-            .rdata()
+            .data()
         {
-            RData::A(ip) => assert_eq!(Ipv4Addr::new(127, 0, 0, 5), *ip),
+            Some(RData::A(ip)) => assert_eq!(Ipv4Addr::new(127, 0, 0, 5), *ip),
             _ => panic!("wrong rdata type returned"),
         }
     }

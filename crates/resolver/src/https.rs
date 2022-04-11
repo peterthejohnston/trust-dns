@@ -1,3 +1,10 @@
+// Copyright 2015-2022 Benjamin Fry <benjaminfry@me.com>
+//
+// Licensed under the Apache License, Version 2.0, <LICENSE-APACHE or
+// http://apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
+// http://opensource.org/licenses/MIT>, at your option. This file may not be
+// copied, modified, or distributed except according to those terms.
+
 use std::net::SocketAddr;
 
 use crate::name_server::RuntimeProvider;
@@ -12,6 +19,7 @@ use crate::config::TlsClientConfig;
 #[allow(clippy::type_complexity)]
 pub(crate) fn new_https_stream<R>(
     socket_addr: SocketAddr,
+    bind_addr: Option<SocketAddr>,
     dns_name: String,
     client_config: Option<TlsClientConfig>,
 ) -> DnsExchangeConnect<HttpsClientConnect<R::Tcp>, HttpsClientStream, TokioTime>
@@ -23,7 +31,10 @@ where
         |TlsClientConfig(client_config)| client_config,
     );
 
-    let https_builder = HttpsClientStreamBuilder::with_client_config(client_config);
+    let mut https_builder = HttpsClientStreamBuilder::with_client_config(client_config);
+    if let Some(bind_addr) = bind_addr {
+        https_builder.bind_addr(bind_addr);
+    }
     DnsExchange::connect(https_builder.build::<R::Tcp>(socket_addr, dns_name))
 }
 
@@ -43,7 +54,7 @@ mod tests {
             config,
             ResolverOpts {
                 try_tcp_on_error: true,
-                ..Default::default()
+                ..ResolverOpts::default()
             },
             TokioHandle,
         )

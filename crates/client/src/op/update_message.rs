@@ -9,6 +9,8 @@
 
 use std::fmt::Debug;
 
+use trust_dns_proto::op::Edns;
+
 use crate::client::async_client::MAX_PAYLOAD_LEN;
 use crate::op::{Message, MessageType, OpCode, Query};
 use crate::rr::rdata::{NULL, SOA};
@@ -185,9 +187,11 @@ pub fn create(rrset: RecordSet, zone_origin: Name, use_edns: bool) -> Message {
 
     // Extended dns
     if use_edns {
-        let edns = message.edns_mut();
-        edns.set_max_payload(MAX_PAYLOAD_LEN);
-        edns.set_version(0);
+        message
+            .extensions_mut()
+            .get_or_insert_with(Edns::new)
+            .set_max_payload(MAX_PAYLOAD_LEN)
+            .set_version(0);
     }
 
     message
@@ -255,9 +259,11 @@ pub fn append(rrset: RecordSet, zone_origin: Name, must_exist: bool, use_edns: b
 
     // Extended dns
     if use_edns {
-        let edns = message.edns_mut();
-        edns.set_max_payload(MAX_PAYLOAD_LEN);
-        edns.set_version(0);
+        message
+            .extensions_mut()
+            .get_or_insert_with(Edns::new)
+            .set_max_payload(MAX_PAYLOAD_LEN)
+            .set_version(0);
     }
 
     message
@@ -346,9 +352,11 @@ pub fn compare_and_swap(
 
     // Extended dns
     if use_edns {
-        let edns = message.edns_mut();
-        edns.set_max_payload(MAX_PAYLOAD_LEN);
-        edns.set_version(0);
+        message
+            .extensions_mut()
+            .get_or_insert_with(Edns::new)
+            .set_max_payload(MAX_PAYLOAD_LEN)
+            .set_version(0);
     }
 
     message
@@ -416,9 +424,11 @@ pub fn delete_by_rdata(mut rrset: RecordSet, zone_origin: Name, use_edns: bool) 
 
     // Extended dns
     if use_edns {
-        let edns = message.edns_mut();
-        edns.set_max_payload(MAX_PAYLOAD_LEN);
-        edns.set_version(0);
+        message
+            .extensions_mut()
+            .get_or_insert(Edns::new())
+            .set_max_payload(MAX_PAYLOAD_LEN)
+            .set_version(0);
     }
 
     message
@@ -481,14 +491,16 @@ pub fn delete_rrset(mut record: Record, zone_origin: Name, use_edns: bool) -> Me
     // the TTL should be 0
     record.set_ttl(0);
     // the rdata must be null to delete all rrsets
-    record.set_rdata(RData::NULL(NULL::new()));
+    record.set_data(Some(RData::NULL(NULL::new())));
     message.add_update(record);
 
     // Extended dns
     if use_edns {
-        let edns = message.edns_mut();
-        edns.set_max_payload(MAX_PAYLOAD_LEN);
-        edns.set_version(0);
+        message
+            .extensions_mut()
+            .get_or_insert_with(Edns::new)
+            .set_max_payload(MAX_PAYLOAD_LEN)
+            .set_version(0);
     }
 
     message
@@ -553,9 +565,11 @@ pub fn delete_all(
 
     // Extended dns
     if use_edns {
-        let edns = message.edns_mut();
-        edns.set_max_payload(MAX_PAYLOAD_LEN);
-        edns.set_version(0);
+        message
+            .extensions_mut()
+            .get_or_insert_with(Edns::new)
+            .set_max_payload(MAX_PAYLOAD_LEN)
+            .set_version(0);
     }
 
     message
@@ -598,9 +612,11 @@ pub fn zone_transfer(zone_origin: Name, last_soa: Option<SOA>) -> Message {
 
     // Extended dns
     {
-        let edns = message.edns_mut();
-        edns.set_max_payload(MAX_PAYLOAD_LEN);
-        edns.set_version(0);
+        message
+            .extensions_mut()
+            .get_or_insert_with(Edns::new)
+            .set_max_payload(MAX_PAYLOAD_LEN)
+            .set_version(0);
     }
 
     message

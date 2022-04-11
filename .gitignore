@@ -20,3 +20,8 @@
 *.rs.bk
 .rls.toml
 rls/**
+
+# ignore fuzzing corpus
+fuzz/artifacts/**
+fuzz/corpus/**
+*~

@@ -1,6 +1,6 @@
 [package]
 name = "trust-dns-server"
-version = "0.21.0-alpha.4"
+version = "0.21.2"
 authors = ["Benjamin Fry <benjaminfry@me.com>"]
 edition = "2018"
 
@@ -59,6 +59,8 @@ dns-over-openssl = ["dns-over-tls", "dnssec-openssl", "trust-dns-proto/dns-over-
 dns-over-rustls = ["dns-over-tls", "dnssec-ring", "rustls", "trust-dns-proto/dns-over-rustls", "trust-dns-client/dns-over-rustls", "trust-dns-resolver/dns-over-rustls", "tokio-rustls"]
 dns-over-tls = []
 
+dns-over-quic = ["dns-over-rustls", "trust-dns-proto/dns-over-quic", "trust-dns-resolver/dns-over-quic"]
+
 # This is a deprecated feature...
 tls-openssl = ["dns-over-openssl"]
 tls = ["dns-over-openssl"]
@@ -73,10 +75,10 @@ name = "trust_dns_server"
 path = "src/lib.rs"
 
 [dependencies]
-async-trait = "0.1.42"
+async-trait = "0.1.43"
 bytes = "1"
 cfg-if = "1"
-enum-as-inner = "0.3"
+enum-as-inner = "0.4"
 env_logger = "0.9"
 futures-executor = { version = "0.3.5", default-features = false, features = ["std"] }
 futures-util = { version = "0.3.5", default-features = false, features = ["std"] }
@@ -84,18 +86,18 @@ h2 = { version = "0.3.0", features = ["stream"], optional = true }
 http = { version = "0.2", optional = true }
 log = "0.4"
 openssl = { version = "0.10", features = ["v102", "v110"], optional = true }
-rusqlite = { version = "0.26.1", features = ["bundled", "time"], optional = true }
+rusqlite = { version = "0.27.0", features = ["bundled", "time"], optional = true }
 rustls = { version = "0.20", optional = true }
 serde = { version = "1.0.114", features = ["derive"] }
 thiserror = "1.0.20"
 time = "0.3"
-tokio = { version = "1.0", features = ["net"] }
+tokio = { version = "1.0", features = ["net", "sync"] }
 tokio-openssl = { version = "0.6.0", optional = true }
 tokio-rustls = { version = "0.23.0", optional = true }
 toml = "0.5"
-trust-dns-client= { version = "0.21.0-alpha.4", path = "../client" }
-trust-dns-proto = { version = "0.21.0-alpha.4", path = "../proto" }
-trust-dns-resolver = { version = "0.21.0-alpha.4", path = "../resolver", features = ["serde-config"], optional = true }
+trust-dns-client= { version = "0.21.1", path = "../client" }
+trust-dns-proto = { version = "0.21.1", path = "../proto" }
+trust-dns-resolver = { version = "0.21.1", path = "../resolver", features = ["serde-config"], optional = true }
 
 [dev-dependencies]
 tokio = { version="1.0", features = ["macros", "rt"] }

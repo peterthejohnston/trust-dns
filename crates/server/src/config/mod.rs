@@ -32,6 +32,7 @@ static DEFAULT_PATH: &str = "/var/named"; // TODO what about windows (do I care?
 static DEFAULT_PORT: u16 = 53;
 static DEFAULT_TLS_PORT: u16 = 853;
 static DEFAULT_HTTPS_PORT: u16 = 443;
+static DEFAULT_QUIC_PORT: u16 = 853; // https://www.ietf.org/archive/id/draft-ietf-dprive-dnsoquic-11.html#name-reservation-of-dedicated-po
 static DEFAULT_TCP_REQUEST_TIMEOUT: u64 = 5;
 
 /// Server configuration
@@ -49,6 +50,8 @@ pub struct Config {
     tls_listen_port: Option<u16>,
     /// HTTPS port to listen on
     https_listen_port: Option<u16>,
+    /// QUIC port to listen on
+    quic_listen_port: Option<u16>,
     /// Timeout associated to a request before it is closed.
     tcp_request_timeout: Option<u64>,
     /// Level at which to log, default is INFO
@@ -59,12 +62,13 @@ pub struct Config {
     #[serde(default)]
     zones: Vec<ZoneConfig>,
     /// Certificate to associate to TLS connections (currently the same is used for HTTPS and TLS)
+    #[cfg(feature = "dnssec")]
     tls_cert: Option<dnssec::TlsCertConfig>,
 }
 
 impl Config {
     /// read a Config file from the file specified at path.
-    pub fn read_config(path: &Path) -> ConfigResult<Config> {
+    pub fn read_config(path: &Path) -> ConfigResult<Self> {
         let mut file: File = File::open(path)?;
         let mut toml: String = String::new();
         file.read_to_string(&mut toml)?;
@@ -102,6 +106,11 @@ impl Config {
         self.https_listen_port.unwrap_or(DEFAULT_HTTPS_PORT)
     }
 
+    /// port on which to listen for QUIC connections
+    pub fn get_quic_listen_port(&self) -> u16 {
+        self.quic_listen_port.unwrap_or(DEFAULT_QUIC_PORT)
+    }
+
     /// default timeout for all TCP connections before forceably shutdown
     pub fn get_tcp_request_timeout(&self) -> Duration {
         Duration::from_secs(
@@ -130,7 +139,7 @@ impl Config {
     pub fn get_directory(&self) -> &Path {
         self.directory
             .as_ref()
-            .map_or(Path::new(DEFAULT_PATH), |s| Path::new(s))
+            .map_or(Path::new(DEFAULT_PATH), Path::new)
     }
 
     /// the set of zones which should be loaded
@@ -153,7 +162,7 @@ impl Config {
 impl FromStr for Config {
     type Err = ConfigError;
 
-    fn from_str(toml: &str) -> ConfigResult<Config> {
+    fn from_str(toml: &str) -> ConfigResult<Self> {
         toml::de::from_str(toml).map_err(Into::into)
     }
 }
@@ -202,7 +211,7 @@ impl ZoneConfig {
         enable_dnssec: Option<bool>,
         keys: Vec<dnssec::KeyConfig>,
     ) -> Self {
-        ZoneConfig {
+        Self {
             zone,
             zone_type,
             file: Some(file),

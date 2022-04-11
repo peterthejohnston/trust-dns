@@ -6,14 +6,16 @@
 // copied, modified, or distributed except according to those terms.
 
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use async_std::task::spawn_blocking;
 use async_trait::async_trait;
 use futures_io::{AsyncRead, AsyncWrite};
 use futures_util::future::FutureExt;
 use pin_utils::pin_mut;
+use socket2::{Domain, Protocol, Socket, Type};
 use trust_dns_resolver::proto::tcp::{Connect, DnsTcpStream};
 use trust_dns_resolver::proto::udp::UdpSocket;
 
@@ -24,6 +26,23 @@ pub struct AsyncStdUdpSocket(async_std::net::UdpSocket);
 #[async_trait]
 impl UdpSocket for AsyncStdUdpSocket {
     type Time = AsyncStdTime;
+
+    async fn connect_with_bind(_addr: SocketAddr, bind_addr: SocketAddr) -> io::Result<Self> {
+        let socket = async_std::net::UdpSocket::bind(bind_addr).await?;
+
+        // TODO: research connect more, it appears to break receive tests on UDP
+        // socket.connect(addr).await?;
+        Ok(Self(socket))
+    }
+
+    async fn connect(addr: SocketAddr) -> io::Result<Self> {
+        let bind_addr: SocketAddr = match addr {
+            SocketAddr::V4(_addr) => (Ipv4Addr::UNSPECIFIED, 0).into(),
+            SocketAddr::V6(_addr) => (Ipv6Addr::UNSPECIFIED, 0).into(),
+        };
+
+        Self::connect_with_bind(addr, bind_addr).await
+    }
 
     async fn bind(addr: SocketAddr) -> io::Result<Self> {
         async_std::net::UdpSocket::bind(addr)
@@ -71,10 +90,30 @@ impl DnsTcpStream for AsyncStdTcpStream {
 
 #[async_trait]
 impl Connect for AsyncStdTcpStream {
-    async fn connect(addr: SocketAddr) -> io::Result<Self> {
-        let stream = async_std::net::TcpStream::connect(addr).await?;
+    async fn connect_with_bind(
+        addr: SocketAddr,
+        bind_addr: Option<SocketAddr>,
+    ) -> io::Result<Self> {
+        let stream = match bind_addr {
+            Some(bind_addr) => {
+                spawn_blocking(move || {
+                    let domain = match bind_addr {
+                        SocketAddr::V4(_) => Domain::IPV4,
+                        SocketAddr::V6(_) => Domain::IPV6,
+                    };
+                    let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+                    socket.bind(&bind_addr.into())?;
+                    socket.connect(&addr.into())?;
+                    let std_stream: std::net::TcpStream = socket.into();
+                    let stream = async_std::net::TcpStream::from(std_stream);
+                    Ok::<_, io::Error>(stream)
+                })
+                .await?
+            }
+            None => async_std::net::TcpStream::connect(addr).await?,
+        };
         stream.set_nodelay(true)?;
-        Ok(AsyncStdTcpStream(stream))
+        Ok(Self(stream))
     }
 }
 

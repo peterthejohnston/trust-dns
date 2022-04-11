@@ -18,15 +18,13 @@ use log::{error, info, warn};
 
 use crate::{
     authority::{Authority, LookupError, LookupOptions, MessageRequest, UpdateResult, ZoneType},
-    client::{
-        op::LowerQuery,
-        rr::{LowerName, RrKey},
-    },
+    client::rr::{LowerName, RrKey},
     error::{PersistenceErrorKind, PersistenceResult},
     proto::{
         op::ResponseCode,
         rr::{DNSClass, Name, RData, Record, RecordSet, RecordType},
     },
+    server::RequestInfo,
     store::{
         in_memory::InMemoryAuthority,
         sqlite::{Journal, SqliteConfig},
@@ -99,7 +97,7 @@ impl SqliteAuthority {
                 .map_err(|e| format!("error opening journal: {:?}: {}", journal_path, e))?;
 
             let in_memory = InMemoryAuthority::empty(zone_name.clone(), zone_type, allow_axfr);
-            let mut authority = SqliteAuthority::new(in_memory, config.allow_update, enable_dnssec);
+            let mut authority = Self::new(in_memory, config.allow_update, enable_dnssec);
 
             authority
                 .recover_with_journal(&journal)
@@ -127,7 +125,7 @@ impl SqliteAuthority {
             )?
             .unwrap();
 
-            let mut authority = SqliteAuthority::new(in_memory, config.allow_update, enable_dnssec);
+            let mut authority = Self::new(in_memory, config.allow_update, enable_dnssec);
 
             // if dynamic update is enabled, enable the journal
             info!("creating new journal: {:?}", journal_path);
@@ -327,7 +325,7 @@ impl SqliteAuthority {
 
             match require.dns_class() {
                 DNSClass::ANY => {
-                    if let RData::NULL(..) = *require.rdata() {
+                    if let None | Some(RData::NULL(..)) = require.data() {
                         match require.rr_type() {
                             // ANY      ANY      empty    Name is in use
                             RecordType::ANY => {
@@ -365,7 +363,7 @@ impl SqliteAuthority {
                     }
                 }
                 DNSClass::NONE => {
-                    if let RData::NULL(..) = *require.rdata() {
+                    if let None | Some(RData::NULL(..)) = require.data() {
                         match require.rr_type() {
                             // NONE     ANY      empty    Name is not in use
                             RecordType::ANY => {
@@ -481,11 +479,9 @@ impl SqliteAuthority {
         if !sig0s.is_empty() {
             let mut found_key = false;
             for sig in sig0s.iter().filter_map(|sig0| {
-                if let RData::DNSSEC(DNSSECRData::SIG(ref sig)) = *sig0.rdata() {
-                    Some(sig)
-                } else {
-                    None
-                }
+                sig0.data()
+                    .and_then(RData::as_dnssec)
+                    .and_then(DNSSECRData::as_sig)
             }) {
                 let name = LowerName::from(sig.signer_name());
                 let keys = self
@@ -502,11 +498,10 @@ impl SqliteAuthority {
                 found_key = keys
                     .iter()
                     .filter_map(|rr_set| {
-                        if let RData::DNSSEC(DNSSECRData::KEY(ref key)) = *rr_set.rdata() {
-                            Some(key)
-                        } else {
-                            None
-                        }
+                        rr_set
+                            .data()
+                            .and_then(RData::as_dnssec)
+                            .and_then(DNSSECRData::as_key)
                     })
                     .any(|key| {
                         key.verify_message(update_message, sig.sig(), sig)
@@ -604,7 +599,7 @@ impl SqliteAuthority {
                         if rr.ttl() != 0 {
                             return Err(ResponseCode::FormErr);
                         }
-                        if let RData::NULL(..) = *rr.rdata() {
+                        if let None | Some(RData::NULL(..)) = rr.data() {
                             ()
                         } else {
                             return Err(ResponseCode::FormErr);
@@ -766,6 +761,7 @@ impl SqliteAuthority {
                                 .filter(|k| k.name == rr_name)
                                 .cloned()
                                 .collect::<Vec<RrKey>>();
+
                             for delete in to_delete {
                                 self.in_memory.records_mut().await.remove(&delete);
                                 updated = true;
@@ -778,7 +774,7 @@ impl SqliteAuthority {
                             //   SOA or NS RRs will be deleted.
 
                             // ANY      rrset    empty    Delete an RRset
-                            if let RData::NULL(..) = *rr.rdata() {
+                            if let None | Some(RData::NULL(..)) = rr.data() {
                                 let deleted = self.in_memory.records_mut().await.remove(&rr_key);
                                 info!("deleted rrset: {:?}", deleted);
                                 updated = updated || deleted.is_some();
@@ -968,10 +964,10 @@ impl Authority for SqliteAuthority {
 
     async fn search(
         &self,
-        query: &LowerQuery,
+        request_info: RequestInfo<'_>,
         lookup_options: LookupOptions,
     ) -> Result<Self::Lookup, LookupError> {
-        self.in_memory.search(query, lookup_options).await
+        self.in_memory.search(request_info, lookup_options).await
     }
 
     /// Return the NSEC records based on the given name

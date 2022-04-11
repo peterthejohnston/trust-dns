@@ -290,12 +290,9 @@ fn parse_ipv6_hint(value: Option<&str>) -> Result<SvcParamValue, ParseError> {
 ///   SvcParams in presentation format MAY appear in any order, but keys
 ///   MUST NOT be repeated.
 /// ```
-#[allow(clippy::unnecessary_wraps)]
 fn parse_unknown(value: Option<&str>) -> Result<SvcParamValue, ParseError> {
-    let unknown: Vec<Vec<u8>> = if let Some(value) = value {
-        let unknown = parse_list::<String>(value).expect("infallible");
-
-        unknown.into_iter().map(|s| s.as_bytes().to_vec()).collect()
+    let unknown: Vec<u8> = if let Some(value) = value {
+        value.as_bytes().to_vec()
     } else {
         Vec::new()
     };
@@ -322,6 +319,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use trust_dns_proto::rr::RData;
+
     use crate::rr::DNSClass;
     use crate::serialize::txt::{Lexer, Parser};
 
@@ -342,8 +341,8 @@ mod tests {
             .into_iter()
             .next()
             .unwrap()
-            .rdata()
-            .as_svcb()
+            .data()
+            .and_then(RData::as_svcb)
             .expect("Not an SVCB record")
             .clone()
     }

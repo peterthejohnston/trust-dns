@@ -8,9 +8,11 @@
 
 // LIBRARY WARNINGS
 #![warn(
+    clippy::default_trait_access,
     clippy::dbg_macro,
     clippy::print_stdout,
     clippy::unimplemented,
+    clippy::use_self,
     missing_copy_implementations,
     missing_docs,
     non_snake_case,
@@ -72,6 +74,12 @@ pub mod op;
 #[cfg(feature = "dns-over-openssl")]
 #[cfg_attr(docsrs, doc(cfg(feature = "dns-over-openssl")))]
 pub mod openssl;
+#[cfg(all(feature = "dns-over-quic", feature = "tokio-runtime"))]
+#[cfg_attr(
+    docsrs,
+    doc(cfg(all(feature = "dns-over-quic", feature = "tokio-runtime")))
+)]
+pub mod quic;
 pub mod rr;
 #[cfg(feature = "dns-over-rustls")]
 #[cfg_attr(docsrs, doc(cfg(feature = "dns-over-rustls")))]
@@ -196,11 +204,11 @@ pub trait Executor {
 #[cfg_attr(docsrs, doc(cfg(feature = "tokio-runtime")))]
 impl Executor for Runtime {
     fn new() -> Self {
-        Runtime::new().expect("failed to create tokio runtime")
+        Self::new().expect("failed to create tokio runtime")
     }
 
     fn block_on<F: Future>(&mut self, future: F) -> F::Output {
-        Runtime::block_on(self, future)
+        Self::block_on(self, future)
     }
 }
 

@@ -16,9 +16,11 @@
 
 // LIBRARY WARNINGS
 #![warn(
+    clippy::default_trait_access,
     clippy::dbg_macro,
     clippy::print_stdout,
     clippy::unimplemented,
+    clippy::use_self,
     missing_copy_implementations,
     missing_docs,
     non_snake_case,
@@ -124,7 +126,7 @@
 //! // Records are generic objects which can contain any data.
 //! //  In order to access it we need to first check what type of record it is
 //! //  In this case we are interested in A, IPv4 address
-//! if let &RData::A(ref ip) = answers[0].rdata() {
+//! if let Some(RData::A(ref ip)) = answers[0].data() {
 //!     assert_eq!(*ip, Ipv4Addr::new(93, 184, 216, 34))
 //! } else {
 //!     assert!(false, "unexpected result")
@@ -199,7 +201,7 @@
 //! let mut record = Record::with(Name::from_str("new.example.com").unwrap(),
 //!                               RecordType::A,
 //!                               Duration::minutes(5).whole_seconds() as u32);
-//! record.set_rdata(RData::A(Ipv4Addr::new(100, 10, 100, 10)));
+//! record.set_data(Some(RData::A(Ipv4Addr::new(100, 10, 100, 10))));
 //!
 //! // the server must be authoritative for this zone
 //! let origin = Name::from_str("example.com.").unwrap();
@@ -260,7 +262,7 @@
 //!     let response = query.await.unwrap();
 //!
 //!     // validate it's what we expected
-//!     if let RData::A(addr) = response.answers()[0].rdata() {
+//!     if let Some(RData::A(addr)) = response.answers()[0].data() {
 //!         assert_eq!(*addr, Ipv4Addr::new(93, 184, 216, 34));
 //!     }
 //! }

@@ -9,17 +9,16 @@
 
 use std::{
     borrow::Borrow,
-    collections::BTreeMap,
-    ops::{Deref, DerefMut},
+    collections::{BTreeMap, HashSet},
+    ops::DerefMut,
     sync::Arc,
 };
 
 use cfg_if::cfg_if;
-use futures_util::{
-    future::{self, TryFutureExt},
-    lock::{Mutex, MutexGuard},
-};
+use futures_util::future::{self, TryFutureExt};
 use log::{debug, error, warn};
+
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[cfg(feature = "dnssec")]
 use crate::{
@@ -35,13 +34,16 @@ use crate::{
         MessageRequest, UpdateResult, ZoneType,
     },
     client::{
-        op::{LowerQuery, ResponseCode},
+        op::ResponseCode,
         rr::{
             rdata::SOA,
             {DNSClass, LowerName, Name, RData, Record, RecordSet, RecordType, RrKey},
         },
     },
+    server::RequestInfo,
 };
+#[cfg(all(feature = "dnssec", feature = "testing"))]
+use std::ops::Deref;
 
 /// InMemoryAuthority is responsible for storing the resource records for a particular zone.
 ///
@@ -52,7 +54,7 @@ pub struct InMemoryAuthority {
     class: DNSClass,
     zone_type: ZoneType,
     allow_axfr: bool,
-    inner: Mutex<InnerInMemory>,
+    inner: RwLock<InnerInMemory>,
 }
 
 impl InMemoryAuthority {
@@ -85,7 +87,8 @@ impl InMemoryAuthority {
             .iter()
             .find(|(key, _)| key.record_type == RecordType::SOA)
             .and_then(|(_, rrset)| rrset.records_without_rrsigs().next())
-            .and_then(|record| record.rdata().as_soa())
+            .and_then(Record::data)
+            .and_then(RData::as_soa)
             .map(SOA::serial)
             .ok_or_else(|| format!("SOA record must be present: {}", origin))?;
 
@@ -120,7 +123,7 @@ impl InMemoryAuthority {
             class: DNSClass::IN,
             zone_type,
             allow_axfr,
-            inner: Mutex::new(InnerInMemory::default()),
+            inner: RwLock::new(InnerInMemory::default()),
         }
     }
 
@@ -144,19 +147,20 @@ impl InMemoryAuthority {
     /// Retrieve the Signer, which contains the private keys, for this zone
     #[cfg(all(feature = "dnssec", feature = "testing"))]
     pub async fn secure_keys(&self) -> impl Deref<Target = [SigSigner]> + '_ {
-        MutexGuard::map(self.inner.lock().await, |i| i.secure_keys.as_mut_slice())
+        RwLockWriteGuard::map(self.inner.write().await, |i| i.secure_keys.as_mut_slice())
     }
 
     /// Get all the records
-    pub async fn records(&self) -> impl Deref<Target = BTreeMap<RrKey, Arc<RecordSet>>> + '_ {
-        MutexGuard::map(self.inner.lock().await, |i| &mut i.records)
+    pub async fn records(&self) -> BTreeMap<RrKey, Arc<RecordSet>> {
+        let records = RwLockReadGuard::map(self.inner.read().await, |i| &i.records);
+        records.clone()
     }
 
     /// Get a mutable reference to the records
     pub async fn records_mut(
         &self,
     ) -> impl DerefMut<Target = BTreeMap<RrKey, Arc<RecordSet>>> + '_ {
-        MutexGuard::map(self.inner.lock().await, |i| &mut i.records)
+        RwLockWriteGuard::map(self.inner.write().await, |i| &mut i.records)
     }
 
     /// Get a mutable reference to the records
@@ -166,19 +170,19 @@ impl InMemoryAuthority {
 
     /// Returns the minimum ttl (as used in the SOA record)
     pub async fn minimum_ttl(&self) -> u32 {
-        self.inner.lock().await.minimum_ttl(self.origin())
+        self.inner.read().await.minimum_ttl(self.origin())
     }
 
     /// get the current serial number for the zone.
     pub async fn serial(&self) -> u32 {
-        self.inner.lock().await.serial(self.origin())
+        self.inner.read().await.serial(self.origin())
     }
 
     #[cfg(any(feature = "dnssec", feature = "sqlite"))]
     #[allow(unused)]
     pub(crate) async fn increment_soa_serial(&self) -> u32 {
         self.inner
-            .lock()
+            .write()
             .await
             .increment_soa_serial(self.origin(), self.class)
     }
@@ -196,7 +200,7 @@ impl InMemoryAuthority {
     ///
     /// true if the value was inserted, false otherwise
     pub async fn upsert(&self, record: Record, serial: u32) -> bool {
-        self.inner.lock().await.upsert(record, serial, self.class)
+        self.inner.write().await.upsert(record, serial, self.class)
     }
 
     /// Non-async version of upsert when behind a mutable reference.
@@ -302,6 +306,7 @@ impl InMemoryAuthority {
     }
 }
 
+#[derive(Default)]
 struct InnerInMemory {
     records: BTreeMap<RrKey, Arc<RecordSet>>,
     // Private key mapped to the Record of the DNSKey
@@ -311,16 +316,6 @@ struct InnerInMemory {
     //   for this, in some form, perhaps alternate root zones...
     #[cfg(feature = "dnssec")]
     secure_keys: Vec<SigSigner>,
-}
-
-impl Default for InnerInMemory {
-    fn default() -> Self {
-        Self {
-            records: BTreeMap::new(),
-            #[cfg(feature = "dnssec")]
-            secure_keys: Vec::new(),
-        }
-    }
 }
 
 impl InnerInMemory {
@@ -347,7 +342,8 @@ impl InnerInMemory {
         self.records
             .get(&rr_key)
             .and_then(|rrset| rrset.records_without_rrsigs().next())
-            .and_then(|record| record.rdata().as_soa())
+            .and_then(Record::data)
+            .and_then(RData::as_soa)
     }
 
     /// Returns the minimum ttl (as used in the SOA record)
@@ -426,6 +422,7 @@ impl InnerInMemory {
             name.clone().into_wildcard()
         };
 
+        #[allow(clippy::needless_late_init)]
         self.inner_lookup(&wildcard, record_type, lookup_options)
             // we need to change the name to the query name in the result set since this was a wildcard
             .map(|rrset| {
@@ -449,7 +446,9 @@ impl InnerInMemory {
                 };
 
                 for record in records {
-                    new_answer.add_rdata(record.rdata().clone());
+                    if let Some(rdata) = record.data() {
+                        new_answer.add_rdata(rdata.clone());
+                    }
                 }
 
                 #[cfg(feature = "dnssec")]
@@ -465,12 +464,14 @@ impl InnerInMemory {
     ///
     /// # Arguments
     ///
+    /// * original_name - the original name that was being looked up
     /// * query_type - original type in the request query
     /// * next_name - the name from the CNAME, ANAME, MX, etc. record that is being searched
-    /// * search_type - the root search type, ANAME, CNAME, MX, i.e. the begging of the chain
+    /// * search_type - the root search type, ANAME, CNAME, MX, i.e. the beginning of the chain
     fn additional_search(
         &self,
-        query_type: RecordType,
+        original_name: &LowerName,
+        original_query_type: RecordType,
         next_name: LowerName,
         _search_type: RecordType,
         lookup_options: LookupOptions,
@@ -478,8 +479,8 @@ impl InnerInMemory {
         let mut additionals: Vec<Arc<RecordSet>> = vec![];
 
         // if it's a CNAME or other forwarding record, we'll be adding additional records based on the query_type
-        let mut query_types_arr = [query_type; 2];
-        let query_types: &[RecordType] = match query_type {
+        let mut query_types_arr = [original_query_type; 2];
+        let query_types: &[RecordType] = match original_query_type {
             RecordType::ANAME | RecordType::NS | RecordType::MX | RecordType::SRV => {
                 query_types_arr = [RecordType::A, RecordType::AAAA];
                 &query_types_arr[..]
@@ -489,10 +490,24 @@ impl InnerInMemory {
 
         for query_type in query_types {
             // loop and collect any additional records to send
+
+            // Track the names we've looked up for this query type.
+            let mut names = HashSet::new();
+
+            // If we're just going to repeat the same query then bail out.
+            if query_type == &original_query_type {
+                names.insert(original_name.clone());
+            }
+
             let mut next_name = Some(next_name.clone());
             while let Some(search) = next_name.take() {
+                // If we've already looked up this name then bail out.
+                if names.contains(&search) {
+                    break;
+                }
+
                 let additional = self.inner_lookup(&search, *query_type, lookup_options);
-                let mut continue_name = None;
+                names.insert(search);
 
                 if let Some(additional) = additional {
                     // assuming no crazy long chains...
@@ -500,11 +515,9 @@ impl InnerInMemory {
                         additionals.push(additional.clone());
                     }
 
-                    continue_name =
+                    next_name =
                         maybe_next_name(&additional, *query_type).map(|(name, _search_type)| name);
                 }
-
-                next_name = continue_name;
             }
         }
 
@@ -532,7 +545,7 @@ impl InnerInMemory {
             return 0;
         };
 
-        let serial = if let RData::SOA(ref mut soa_rdata) = *record.rdata_mut() {
+        let serial = if let Some(RData::SOA(ref mut soa_rdata)) = record.data_mut() {
             soa_rdata.increment_serial();
             soa_rdata.serial()
         } else {
@@ -688,7 +701,7 @@ impl InnerInMemory {
                         // names aren't equal, create the NSEC record
                         let mut record = Record::with(name.clone(), RecordType::NSEC, ttl);
                         let rdata = NSEC::new_cover_self(key.name.clone().into(), vec);
-                        record.set_rdata(RData::DNSSEC(DNSSECRData::NSEC(rdata)));
+                        record.set_data(Some(RData::DNSSEC(DNSSECRData::NSEC(rdata))));
                         records.push(record);
 
                         // new record...
@@ -702,7 +715,7 @@ impl InnerInMemory {
                 // names aren't equal, create the NSEC record
                 let mut record = Record::with(name.clone(), RecordType::NSEC, ttl);
                 let rdata = NSEC::new_cover_self(origin.clone().into(), vec);
-                record.set_rdata(RData::DNSSEC(DNSSECRData::NSEC(rdata)));
+                record.set_data(Some(RData::DNSSEC(DNSSECRData::NSEC(rdata))));
                 records.push(record);
             }
         }
@@ -789,7 +802,7 @@ impl InnerInMemory {
             };
 
             let mut rrsig = rrsig_temp.clone();
-            rrsig.set_rdata(RData::DNSSEC(DNSSECRData::SIG(SIG::new(
+            rrsig.set_data(Some(RData::DNSSEC(DNSSECRData::SIG(SIG::new(
                 // type_covered: RecordType,
                 rr_set.record_type(),
                 // algorithm: Algorithm,
@@ -808,7 +821,7 @@ impl InnerInMemory {
                 signer.signer_name().clone(),
                 // sig: Vec<u8>
                 signature,
-            ))));
+            )))));
 
             rr_set.insert_rrsig(rrsig);
         }
@@ -858,33 +871,38 @@ fn maybe_next_name(
         | (t @ RecordType::ANAME, RecordType::ANAME) => record_set
             .records_without_rrsigs()
             .next()
-            .and_then(|record| record.rdata().as_aname().cloned())
+            .and_then(Record::data)
+            .and_then(RData::as_aname)
             .map(LowerName::from)
             .map(|name| (name, t)),
         (t @ RecordType::NS, RecordType::NS) => record_set
             .records_without_rrsigs()
             .next()
-            .and_then(|record| record.rdata().as_ns().cloned())
+            .and_then(Record::data)
+            .and_then(RData::as_ns)
             .map(LowerName::from)
             .map(|name| (name, t)),
         // CNAME will continue to additional processing for any query type
         (t @ RecordType::CNAME, _) => record_set
             .records_without_rrsigs()
             .next()
-            .and_then(|record| record.rdata().as_cname().cloned())
+            .and_then(Record::data)
+            .and_then(RData::as_cname)
             .map(LowerName::from)
             .map(|name| (name, t)),
         (t @ RecordType::MX, RecordType::MX) => record_set
             .records_without_rrsigs()
             .next()
-            .and_then(|record| record.rdata().as_mx())
+            .and_then(Record::data)
+            .and_then(RData::as_mx)
             .map(|mx| mx.exchange().clone())
             .map(LowerName::from)
             .map(|name| (name, t)),
         (t @ RecordType::SRV, RecordType::SRV) => record_set
             .records_without_rrsigs()
             .next()
-            .and_then(|record| record.rdata().as_srv())
+            .and_then(Record::data)
+            .and_then(RData::as_srv)
             .map(|srv| srv.target().clone())
             .map(LowerName::from)
             .map(|name| (name, t)),
@@ -993,7 +1011,7 @@ impl Authority for InMemoryAuthority {
         query_type: RecordType,
         lookup_options: LookupOptions,
     ) -> Result<Self::Lookup, LookupError> {
-        let inner = self.inner.lock().await;
+        let inner = self.inner.read().await;
 
         // Collect the records from each rr_set
         let (result, additionals): (LookupResult<LookupRecords>, Option<LookupRecords>) =
@@ -1018,6 +1036,7 @@ impl Authority for InMemoryAuthority {
                         .and_then(|(search_name, search_type)| {
                             inner
                                 .additional_search(
+                                    name,
                                     query_type,
                                     search_name,
                                     search_type,
@@ -1058,7 +1077,10 @@ impl Authority for InMemoryAuthority {
                                             _ => None,
                                         })
                                         .map(|records| {
-                                            records.map(Record::rdata).cloned().collect::<Vec<_>>()
+                                            records
+                                                .filter_map(Record::data)
+                                                .cloned()
+                                                .collect::<Vec<_>>()
                                         });
 
                                     (rdatas, a_aaaa_ttl)
@@ -1150,13 +1172,13 @@ impl Authority for InMemoryAuthority {
 
     async fn search(
         &self,
-        query: &LowerQuery,
+        request_info: RequestInfo<'_>,
         lookup_options: LookupOptions,
     ) -> Result<Self::Lookup, LookupError> {
-        debug!("searching InMemoryAuthority for: {}", query);
+        debug!("searching InMemoryAuthority for: {}", request_info.query);
 
-        let lookup_name = query.name();
-        let record_type: RecordType = query.query_type();
+        let lookup_name = request_info.query.name();
+        let record_type: RecordType = request_info.query.query_type();
 
         // if this is an AXFR zone transfer, verify that this is either the Secondary or Primary
         //  for AXFR the first and last record must be the SOA
@@ -1217,7 +1239,7 @@ impl Authority for InMemoryAuthority {
         name: &LowerName,
         lookup_options: LookupOptions,
     ) -> Result<Self::Lookup, LookupError> {
-        let inner = self.inner.lock().await;
+        let inner = self.inner.read().await;
         fn is_nsec_rrset(rr_set: &RecordSet) -> bool {
             rr_set.record_type() == RecordType::NSEC
         }
@@ -1247,7 +1269,8 @@ impl Authority for InMemoryAuthority {
                     rr_set
                         .records(false, SupportedAlgorithms::default())
                         .next()
-                        .and_then(|r| r.rdata().as_dnssec())
+                        .and_then(Record::data)
+                        .and_then(RData::as_dnssec)
                         .and_then(DNSSECRData::as_nsec)
                         .map_or(false, |r| {
                             // the search name is less than the next NSEC record
@@ -1309,7 +1332,7 @@ impl Authority for InMemoryAuthority {
 impl DnssecAuthority for InMemoryAuthority {
     /// Add a (Sig0) key that is authorized to perform updates against this authority
     async fn add_update_auth_key(&self, name: Name, key: KEY) -> DnsSecResult<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.write().await;
 
         Self::inner_add_update_auth_key(&mut inner, name, key, self.origin(), self.class)
     }
@@ -1320,14 +1343,14 @@ impl DnssecAuthority for InMemoryAuthority {
     ///
     /// * `signer` - Signer with associated private key
     async fn add_zone_signing_key(&self, signer: SigSigner) -> DnsSecResult<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.write().await;
 
         Self::inner_add_zone_signing_key(&mut inner, signer, self.origin(), self.class)
     }
 
     /// Sign the zone for DNSSEC
     async fn secure_zone(&self) -> DnsSecResult<()> {
-        let mut inner = self.inner.lock().await;
+        let mut inner = self.inner.write().await;
 
         inner.secure_zone_mut(self.origin(), self.class)
     }

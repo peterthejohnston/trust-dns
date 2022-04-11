@@ -26,25 +26,19 @@ use super::message_request::WireQuery;
 
 /// A EncodableMessage with borrowed data for Responses in the Server
 #[derive(Debug)]
-pub struct MessageResponse<
-    'q,
-    'a,
-    A = Box<dyn Iterator<Item = &'a Record> + Send + 'a>,
-    N = Box<dyn Iterator<Item = &'a Record> + Send + 'a>,
-    S = Box<dyn Iterator<Item = &'a Record> + Send + 'a>,
-    D = Box<dyn Iterator<Item = &'a Record> + Send + 'a>,
-> where
-    A: Iterator<Item = &'a Record> + Send + 'a,
-    N: Iterator<Item = &'a Record> + Send + 'a,
-    S: Iterator<Item = &'a Record> + Send + 'a,
-    D: Iterator<Item = &'a Record> + Send + 'a,
+pub struct MessageResponse<'q, 'a, Answers, NameServers, Soa, Additionals>
+where
+    Answers: Iterator<Item = &'a Record> + Send + 'a,
+    NameServers: Iterator<Item = &'a Record> + Send + 'a,
+    Soa: Iterator<Item = &'a Record> + Send + 'a,
+    Additionals: Iterator<Item = &'a Record> + Send + 'a,
 {
     header: Header,
     query: Option<&'q WireQuery>,
-    answers: A,
-    name_servers: N,
-    soa: S,
-    additionals: D,
+    answers: Answers,
+    name_servers: NameServers,
+    soa: Soa,
+    additionals: Additionals,
     sig0: Vec<Record>,
     edns: Option<Edns>,
 }
@@ -89,6 +83,11 @@ where
     /// Returns the header of the message
     pub fn header(&self) -> &Header {
         &self.header
+    }
+
+    /// Get a mutable reference to the header
+    pub fn header_mut(&mut self) -> &mut Header {
+        &mut self.header
     }
 
     /// Set the EDNS options for the Response
@@ -188,7 +187,17 @@ impl<'q> MessageResponseBuilder<'q> {
     }
 
     /// Construct a Response with no associated records
-    pub fn build_no_records(self, header: Header) -> MessageResponse<'q, 'static> {
+    pub fn build_no_records<'a>(
+        self,
+        header: Header,
+    ) -> MessageResponse<
+        'q,
+        'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+    > {
         MessageResponse {
             header,
             query: self.query,
@@ -208,11 +217,18 @@ impl<'q> MessageResponseBuilder<'q> {
     /// * `id` - request id to which this is a response
     /// * `op_code` - operation for which this is a response
     /// * `response_code` - the type of error
-    pub fn error_msg(
+    pub fn error_msg<'a>(
         self,
         request_header: &Header,
         response_code: ResponseCode,
-    ) -> MessageResponse<'q, 'static> {
+    ) -> MessageResponse<
+        'q,
+        'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+    > {
         let mut header = Header::response_from_request(request_header);
         header.set_response_code(response_code);
 
@@ -250,7 +266,7 @@ mod tests {
 
             let answer = Record::new()
                 .set_name(Name::from_str("www.example.com.").unwrap())
-                .set_rdata(RData::A(Ipv4Addr::new(93, 184, 216, 34)))
+                .set_data(Some(RData::A(Ipv4Addr::new(93, 184, 216, 34))))
                 .set_dns_class(DNSClass::NONE)
                 .clone();
 
@@ -286,7 +302,7 @@ mod tests {
 
             let answer = Record::new()
                 .set_name(Name::from_str("www.example.com.").unwrap())
-                .set_rdata(RData::A(Ipv4Addr::new(93, 184, 216, 34)))
+                .set_data(Some(RData::A(Ipv4Addr::new(93, 184, 216, 34))))
                 .set_dns_class(DNSClass::NONE)
                 .clone();
 

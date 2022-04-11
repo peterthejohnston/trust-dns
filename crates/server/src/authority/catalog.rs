@@ -12,6 +12,7 @@ use std::{borrow::Borrow, collections::HashMap, future::Future, io};
 
 use cfg_if::cfg_if;
 use log::{debug, error, info, trace, warn};
+use trust_dns_proto::rr::Record;
 
 #[cfg(feature = "dnssec")]
 use crate::client::rr::{
@@ -37,9 +38,16 @@ pub struct Catalog {
 }
 
 #[allow(unused_mut, unused_variables)]
-async fn send_response<R: ResponseHandler>(
+async fn send_response<'a, R: ResponseHandler>(
     response_edns: Option<Edns>,
-    mut response: MessageResponse<'_, '_>,
+    mut response: MessageResponse<
+        '_,
+        'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+        impl Iterator<Item = &'a Record> + Send + 'a,
+    >,
     mut response_handle: R,
 ) -> io::Result<ResponseInfo> {
     #[cfg(feature = "dnssec")]
@@ -102,6 +110,7 @@ impl RequestHandler for Catalog {
                     req_edns.version()
                 );
                 response_header.set_response_code(ResponseCode::BADVERS);
+                resp_edns.set_rcode_high(ResponseCode::BADVERS.high());
                 response.edns(resp_edns);
 
                 // TODO: should ResponseHandle consume self?
@@ -170,7 +179,7 @@ impl RequestHandler for Catalog {
 impl Catalog {
     /// Constructs a new Catalog
     pub fn new() -> Self {
-        Catalog {
+        Self {
             authorities: HashMap::new(),
         }
     }
@@ -406,6 +415,7 @@ async fn lookup<'a, R: ResponseHandler + Unpin>(
 
     let (response_header, sections) = build_response(
         &*authority,
+        request_info,
         request.id(),
         request.header(),
         query,
@@ -446,7 +456,7 @@ fn lookup_options_for_edns(edns: Option<&Edns>) -> LookupOptions {
                algs
             } else {
                debug!("no DAU in request, used default SupportAlgorithms");
-               Default::default()
+               SupportedAlgorithms::default()
             };
 
             LookupOptions::for_dnssec(edns.dnssec_ok(), supported_algorithms)
@@ -458,6 +468,7 @@ fn lookup_options_for_edns(edns: Option<&Edns>) -> LookupOptions {
 
 async fn build_response(
     authority: &dyn AuthorityObject,
+    request_info: RequestInfo<'_>,
     request_id: u16,
     request_header: &Header,
     query: &LowerQuery,
@@ -477,7 +488,7 @@ async fn build_response(
     response_header.set_authoritative(authority.zone_type().is_authoritative());
 
     debug!("performing {} on {}", query, authority.origin());
-    let future = authority.search(query, lookup_options);
+    let future = authority.search(request_info, lookup_options);
 
     #[allow(deprecated)]
     let sections = match authority.zone_type() {

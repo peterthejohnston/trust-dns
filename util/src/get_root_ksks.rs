@@ -10,6 +10,7 @@
 
 // BINARY WARNINGS
 #![warn(
+    clippy::default_trait_access,
     clippy::dbg_macro,
     clippy::unimplemented,
     missing_copy_implementations,
@@ -24,9 +25,7 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
 
-use clap::{
-    app_from_crate, crate_authors, crate_description, crate_name, crate_version, ArgMatches,
-};
+use clap::{command, ArgMatches};
 
 use trust_dns_client::rr::dnssec::Algorithm;
 use trust_dns_proto::rr::dnssec::rdata::DNSSECRData;
@@ -34,8 +33,8 @@ use trust_dns_proto::rr::record_data::RData;
 use trust_dns_proto::rr::record_type::RecordType;
 use trust_dns_resolver::Resolver;
 
-fn args<'a>() -> ArgMatches<'a> {
-    app_from_crate!().bin_name("get-root-ksks").get_matches()
+fn args() -> ArgMatches {
+    command!().bin_name("get-root-ksks").get_matches()
 }
 
 /// Run the get_root_ksks program
@@ -50,6 +49,7 @@ pub fn main() {
         .expect("query failed");
 
     for r in lookup.iter() {
+        #[allow(deprecated)]
         match r {
             RData::DNSSEC(DNSSECRData::DNSKEY(dnskey)) => {
                 if !(dnskey.secure_entry_point() && dnskey.zone_key()) {

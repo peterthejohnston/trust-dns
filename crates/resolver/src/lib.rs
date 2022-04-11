@@ -229,9 +229,11 @@
 
 // LIBRARY WARNINGS
 #![warn(
+    clippy::default_trait_access,
     clippy::dbg_macro,
     clippy::print_stdout,
     clippy::unimplemented,
+    clippy::use_self,
     missing_copy_implementations,
     missing_docs,
     non_snake_case,
@@ -268,6 +270,8 @@ pub mod lookup;
 pub mod lookup_ip;
 #[doc(hidden)]
 pub mod name_server;
+#[cfg(feature = "dns-over-quic")]
+mod quic;
 #[cfg(feature = "tokio-runtime")]
 mod resolver;
 pub mod system_conf;

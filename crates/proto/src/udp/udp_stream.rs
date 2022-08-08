@@ -14,9 +14,9 @@ use std::task::{Context, Poll};
 use async_trait::async_trait;
 use futures_util::stream::Stream;
 use futures_util::{future::Future, ready, TryFutureExt};
-use log::debug;
 use rand;
 use rand::distributions::{uniform::Uniform, Distribution};
+use tracing::{debug, warn};
 
 use crate::xfer::{BufDnsStreamHandle, SerialMessage, StreamReceiver};
 use crate::Time;
@@ -170,7 +170,13 @@ impl<S: UdpSocket + Send + 'static> Stream for UdpStream<S> {
             //   meaning that sending will be prefered over receiving...
 
             // TODO: shouldn't this return the error to send to the sender?
-            ready!(socket.poll_send_to(cx, message.bytes(), addr))?;
+            if let Err(e) = ready!(socket.poll_send_to(cx, message.bytes(), addr)) {
+                // Drop the UDP packet and continue
+                warn!(
+                    "error sending message to {} on udp_socket, dropping response: {}",
+                    addr, e
+                );
+            }
 
             // message sent, need to pop the message
             assert!(outbound_messages.as_mut().poll_next(cx).is_ready());
@@ -276,7 +282,7 @@ impl UdpSocket for tokio::net::UdpSocket {
 
     /// setups up a "client" udp connection that will only receive packets from the associated address
     ///
-    /// if the addr is ipv4 then it will bind local addr to 0.0.0.0:0, ipv6 [::]0
+    /// if the addr is ipv4 then it will bind local addr to 0.0.0.0:0, ipv6 \[::\]0
     async fn connect(addr: SocketAddr) -> io::Result<Self> {
         let bind_addr: SocketAddr = match addr {
             SocketAddr::V4(_addr) => (Ipv4Addr::UNSPECIFIED, 0).into(),

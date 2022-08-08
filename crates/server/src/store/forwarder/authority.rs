@@ -7,7 +7,7 @@
 
 use std::io;
 
-use log::{debug, info};
+use tracing::{debug, info};
 use trust_dns_proto::xfer::DnsRequestOptions;
 
 use crate::{
@@ -37,7 +37,7 @@ impl ForwardAuthority {
     /// TODO: change this name to create or something
     #[allow(clippy::new_without_default)]
     #[doc(hidden)]
-    pub async fn new(runtime: TokioHandle) -> Result<Self, String> {
+    pub fn new(runtime: TokioHandle) -> Result<Self, String> {
         let resolver = TokioAsyncResolver::from_system_conf(runtime)
             .map_err(|e| format!("error constructing new Resolver: {}", e))?;
 
@@ -48,7 +48,7 @@ impl ForwardAuthority {
     }
 
     /// Read the Authority for the origin from the specified configuration
-    pub async fn try_from_config(
+    pub fn try_from_config(
         origin: Name,
         _zone_type: ZoneType,
         config: &ForwardConfig,
@@ -70,7 +70,7 @@ impl ForwardAuthority {
         // preserve_intemediates enables when set to true, and disables
         // when set to false. So we set it to true.
         if !options.preserve_intermediates {
-            log::warn!(
+            tracing::warn!(
                 "preserve_intermediates set to false, which is invalid \
                 for a forwarder; switching to true"
             );
@@ -164,7 +164,10 @@ impl Authority for ForwardAuthority {
     }
 }
 
-pub struct ForwardLookup(ResolverLookup);
+/// A structure that holds the results of a forwarding lookup.
+///
+/// This exposes an interator interface for consumption downstream.
+pub struct ForwardLookup(pub ResolverLookup);
 
 impl LookupObject for ForwardLookup {
     fn is_empty(&self) -> bool {

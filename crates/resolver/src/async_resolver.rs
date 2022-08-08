@@ -19,6 +19,7 @@ use proto::rr::domain::TryParseIp;
 use proto::rr::{IntoName, Name, Record, RecordType};
 use proto::xfer::{DnsRequestOptions, RetryDnsHandle};
 use proto::DnsHandle;
+use tracing::{debug, trace};
 
 use crate::caching_client::CachingClient;
 use crate::config::{ResolverConfig, ResolverOpts};
@@ -189,7 +190,7 @@ impl<R: RuntimeProvider> AsyncResolver<GenericConnection, GenericConnectionProvi
     }
 
     /// Flushes/Removes all entries from the cache
-    pub async fn clear_cache(&mut self) {
+    pub fn clear_cache(&self) {
         self.client_cache.clear_cache();
     }
 }
@@ -227,7 +228,7 @@ impl<C: DnsHandle<Error = ResolveError>, P: ConnectionProvider<Conn = C>> AsyncR
             #[cfg(not(feature = "dnssec"))]
             {
                 // TODO: should this just be a panic, or a pinned error?
-                warn!("validate option is only available with 'dnssec' feature");
+                tracing::warn!("validate option is only available with 'dnssec' feature");
                 either = LookupEither::Retry(client);
             }
         } else {
@@ -434,6 +435,11 @@ impl<C: DnsHandle<Error = ResolveError>, P: ConnectionProvider<Conn = C>> AsyncR
             finally_ip_addr.and_then(Record::into_data),
         )
         .await
+    }
+
+    /// Customizes the static hosts used in this resolver.
+    pub fn set_hosts(&mut self, hosts: Option<Hosts>) {
+        self.hosts = hosts.map(Arc::new);
     }
 
     lookup_fn!(

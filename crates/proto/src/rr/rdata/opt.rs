@@ -15,13 +15,14 @@
  */
 
 //! option record for passing protocol options between the client and server
+#![allow(clippy::use_self)]
 
 use std::collections::HashMap;
 
 #[cfg(feature = "serde-config")]
 use serde::{Deserialize, Serialize};
 
-use log::warn;
+use tracing::warn;
 
 use crate::error::*;
 use crate::serialize::binary::*;

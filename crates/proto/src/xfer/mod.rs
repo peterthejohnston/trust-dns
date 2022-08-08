@@ -14,7 +14,7 @@ use futures_channel::oneshot;
 use futures_util::future::Future;
 use futures_util::ready;
 use futures_util::stream::{Fuse, Peekable, Stream, StreamExt};
-use log::{debug, warn};
+use tracing::{debug, warn};
 
 use crate::error::*;
 use crate::Time;
@@ -44,8 +44,13 @@ pub use self::retry_dns_handle::RetryDnsHandle;
 pub use self::serial_message::SerialMessage;
 
 /// Ignores the result of a send operation and logs and ignores errors
-fn ignore_send<M, E: Debug>(result: Result<M, E>) {
+fn ignore_send<M, T>(result: Result<M, mpsc::TrySendError<T>>) {
     if let Err(error) = result {
+        if error.is_disconnected() {
+            debug!("ignoring send error on disconnected stream");
+            return;
+        }
+
         warn!("error notifying wait, possible future leak: {:?}", error);
     }
 }

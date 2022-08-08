@@ -12,10 +12,10 @@ use std::{
 };
 
 use futures_util::{future, StreamExt};
-use log::{debug, info, warn};
 #[cfg(feature = "dns-over-rustls")]
 use rustls::{Certificate, PrivateKey};
 use tokio::{net, task::JoinHandle};
+use tracing::{debug, info, warn};
 use trust_dns_proto::rr::Record;
 
 #[cfg(all(feature = "dns-over-openssl", not(feature = "dns-over-rustls")))]
@@ -70,7 +70,7 @@ impl<T: RequestHandler> ServerFuture<T> {
                     let message = match message {
                         Err(e) => {
                             warn!("error receiving message on udp_socket: {}", e);
-                            continue;
+                            break;
                         }
                         Ok(message) => message,
                     };

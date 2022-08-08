@@ -6,6 +6,8 @@
 // copied, modified, or distributed except according to those terms.
 
 //! Configuration for a resolver
+#![allow(clippy::use_self)]
+
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::ops::{Deref, DerefMut};
@@ -297,16 +299,16 @@ pub enum Protocol {
 impl fmt::Display for Protocol {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let protocol = match self {
-            Protocol::Udp => "udp",
-            Protocol::Tcp => "tcp",
+            Self::Udp => "udp",
+            Self::Tcp => "tcp",
             #[cfg(feature = "dns-over-tls")]
-            Protocol::Tls => "tls",
+            Self::Tls => "tls",
             #[cfg(feature = "dns-over-https")]
-            Protocol::Https => "https",
+            Self::Https => "https",
             #[cfg(feature = "dns-over-quic")]
-            Protocol::Quic => "quic",
+            Self::Quic => "quic",
             #[cfg(feature = "mdns")]
-            Protocol::Mdns => "mdns",
+            Self::Mdns => "mdns",
         };
 
         f.write_str(protocol)
@@ -317,17 +319,17 @@ impl Protocol {
     /// Returns true if this is a datagram oriented protocol, e.g. UDP
     pub fn is_datagram(self) -> bool {
         match self {
-            Protocol::Udp => true,
-            Protocol::Tcp => false,
+            Self::Udp => true,
+            Self::Tcp => false,
             #[cfg(feature = "dns-over-tls")]
-            Protocol::Tls => false,
+            Self::Tls => false,
             #[cfg(feature = "dns-over-https")]
-            Protocol::Https => false,
+            Self::Https => false,
             // TODO: if you squint, this is true...
             #[cfg(feature = "dns-over-quic")]
-            Protocol::Quic => true,
+            Self::Quic => true,
             #[cfg(feature = "mdns")]
-            Protocol::Mdns => true,
+            Self::Mdns => true,
         }
     }
 
@@ -339,16 +341,16 @@ impl Protocol {
     /// Is this an encrypted protocol, i.e. TLS or HTTPS
     pub fn is_encrypted(self) -> bool {
         match self {
-            Protocol::Udp => false,
-            Protocol::Tcp => false,
+            Self::Udp => false,
+            Self::Tcp => false,
             #[cfg(feature = "dns-over-tls")]
-            Protocol::Tls => true,
+            Self::Tls => true,
             #[cfg(feature = "dns-over-https")]
-            Protocol::Https => true,
+            Self::Https => true,
             #[cfg(feature = "dns-over-quic")]
-            Protocol::Quic => true,
+            Self::Quic => true,
             #[cfg(feature = "mdns")]
-            Protocol::Mdns => false,
+            Self::Mdns => false,
         }
     }
 }
@@ -740,9 +742,8 @@ impl Default for LookupIpStrategy {
 #[non_exhaustive]
 pub struct ResolverOpts {
     /// Sets the number of dots that must appear (unless it's a final dot representing the root)
-    ///  that must appear before a query is assumed to include the TLD. The default is one, which
-    ///  means that `www` would never be assumed to be a TLD, and would always be appended to either
-    ///  the search
+    ///  before a query is assumed to include the TLD. The default is one, which means that `www`
+    ///  would never be assumed to be a TLD, and would always be appended to either the search
     pub ndots: usize,
     /// Specify the timeout for a request. Defaults to 5 seconds
     pub timeout: Duration,
